@@ -1,0 +1,12 @@
+.gemini
+.env
+pytest.ini
+todo-list.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
