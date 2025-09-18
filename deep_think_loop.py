@@ -8,6 +8,12 @@ from pydantic import BaseModel, Field
 from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.load_artifacts_tool import load_artifacts_tool
 from .tools.post_creator_tool import generate_image, edit_image
+from .prompt import (
+    CONTENT_GENERATION_AGENT_INSTRUCTION,
+    CONTENT_REVIEW_AGENT_INSTRUCTION,
+    LOOP_CONTROL_AGENT_INSTRUCTION,
+    PROMPT_CAPTURE_AGENT_INSTRUCTION
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -29,87 +35,29 @@ class ContentReview(BaseModel):
 
 content_generation_agent = LlmAgent(
     name="ContentGenAgent",
-    instruction="""
-    You are a helpful and creative design assistant who helps to create images based on the user's requirements. 
-    
-    Carefully study the user's input and extract all the details.
-    
-    if deep_think_iteration: {deep_think_iteration} is 1, call the generate_image tool, else call the edit_image tool
-    Use the below feedback (if any) given by the review agent when you draft your inputs for the edit_image tool to ensure that the content is corrected to meet the user's requirements.
-    you may use the load_artifact_tool to load and study the image if needed before you call the tool.
-
-    **Important**:
-    1. when calling the generate_image or edit_image tools, be very clear and succinct with your instructions. make explicit suggestions on what needs to be changed in order to meet the user's requirements. include only the details needed and omit any unnecessary phrases like "urgent request" or "critical feature"
-    2. avoid vague instructions. for example "improve contrast" and "reduce font size" are vague. instead be explicit "add a black gradient background to the top of the image behind the text to increase contrast" and "reduce font size of the subtitle by 2 points".
-    3. use your creativity to figure out how the user requirements and improvement suggestions can be implemented in the design to address the suggestion.
-
-    Feedback from previous iterations as follows:
-    {content_review}
-    """,
+    instruction=CONTENT_GENERATION_AGENT_INSTRUCTION,
     tools=[generate_image, edit_image, load_artifacts_tool]
 )
 
 content_review_agent = LlmAgent(
     name="ContentReviewAgent",
-            model="gemini-2.5-flash",
-            instruction="""You are a marketing content reviewer. Your job is to evaluate generated marketing content and provide constructive feedback.
-
-Load the generated image named {last_generated_image} using load_artifacts_tool and evaluate it against the original user request and provide feedback on:
-
-1. **Adherence to Request**: Does the content match what the user originally asked for?
-2. **Visual Appeal**: Is the composition, colors, and overall design appealing and professional?
-3. **Obvious Issues**: Are there any clear problems like poor text readability, distorted elements, or technical issues?
-4. **Previous Feedback**: If this is a revision, has the previous feedback been properly addressed?
-5: **Typos**: Are there any misspelt words on the image?
-
-Provide specific, actionable suggestions for improvement. Focus on practical issues that can be addressed in the next iteration.
-
-Be constructive but honest in your assessment. The goal is to help create the best possible marketing content for the user.
-
-Original user request: {original_prompt}
-Current iteration: {iteration_count}
-Previous feedback: {previous_feedback}""",
-            output_schema=ContentReview,
-            output_key="content_review",
-            disallow_transfer_to_parent=True,
-            disallow_transfer_to_peers=True,
-            tools=[load_artifacts_tool]
+    model="gemini-2.5-flash",
+    instruction=CONTENT_REVIEW_AGENT_INSTRUCTION,
+    output_schema=ContentReview,
+    output_key="content_review",
+    disallow_transfer_to_parent=True,
+    disallow_transfer_to_peers=True,
+    tools=[load_artifacts_tool]
 )
 
 loop_control_agent = LlmAgent(
     name="LoopControlAgent",
-            model="gemini-2.5-flash",
-            instruction="""You are responsible for determining whether the deep think content creation process should continue or conclude.
-
-                Analyze the review feedback from the ContentReviewAgent and decide:
-
-                **Continue Loop If:**
-                - The content doesn't match the user's original request
-                - There are significant visual appeal issues
-                - Obvious problems or technical issues exist
-                - Previous feedback hasn't been properly addressed
-                - The content could be significantly improved
-
-                **End Loop If:**
-                - The content matches the user's request well
-                - Visual appeal is good and professional
-                - No obvious issues or problems
-                - Previous feedback has been addressed
-                - Only minor improvements could be made
-                - Maximum iterations have been reached
-
-                **Decision Criteria:**
-                The content should be "good enough" - it doesn't need to be perfect, but it should meet the user's core requirements and be visually appealing.
-
-                If continuing, briefly summarize the key areas that need improvement. If ending, confirm that the content is ready for finalization.
-
-                Current iteration: {iteration_count}
-                Max iterations: 4
-                Review feedback: {content_review}""",
-            output_schema=LoopDecision,
-            output_key="loop_decision",
-            disallow_transfer_to_parent=True,
-            disallow_transfer_to_peers=True,
+    model="gemini-2.5-flash",
+    instruction=LOOP_CONTROL_AGENT_INSTRUCTION,
+    output_schema=LoopDecision,
+    output_key="loop_decision",
+    disallow_transfer_to_parent=True,
+    disallow_transfer_to_peers=True,
 )
 
 class LoopTerminationAgent(BaseAgent):
@@ -159,9 +107,7 @@ class LoopTerminationAgent(BaseAgent):
 
 prompt_capture_agent = LlmAgent(
     name="PromptCaptureAgent",
-    instruction="""
-    You are tasked to analyse the conversation history and extract the key requirements from the user's latest prompt and store in the state variable. output your response as a string. ensure that you have captured all the key details that the user mentioned.
-    """,
+    instruction=PROMPT_CAPTURE_AGENT_INSTRUCTION,
     model="gemini-2.5-flash",
     output_key="original_prompt",
     disallow_transfer_to_parent=True,
@@ -218,7 +164,7 @@ deep_think_loop = LoopAgent(
     max_iterations=5,
 )
 
-# Create an agent tool wrapper for the deep think loop
+# Create an agent tool wrapper for the deep think loop (used if we don't want the user to see the outputs of the deep think loop)
 deep_think_agent_tool = AgentTool(
     agent=deep_think_loop,
 )
