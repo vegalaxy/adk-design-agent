@@ -1,6 +1,6 @@
-# Social Media Design Agent
+# Digital Wardrobe Design Agent
 
-An intelligent multi-agent system built with Google ADK for creating and iterating on social media content. This agent demonstrates advanced AI orchestration patterns with two distinct operational modes: fast interactive design assistance and autonomous quality assurance through "Deep Think Mode."
+An intelligent multi-agent system built with Google ADK for creating and iterating on Wardrobe and fashion products display & designs. This agent demonstrates advanced AI orchestration patterns with two distinct operational modes: fast interactive design assistance and autonomous quality assurance through "Deep Think Mode."
 
 ## Features
 
@@ -15,11 +15,11 @@ An intelligent multi-agent system built with Google ADK for creating and iterati
 
 The agent consists of several specialized sub-agents:
 
-- **Main Social Media Agent**: Handles user interactions and routing
+- **Main Designer Agent**: Handles user interactions and routing
 - **Content Generation Agent**: Creates and edits images with detailed instructions
 - **Content Review Agent**: Evaluates quality across multiple dimensions
 - **Loop Control Agent**: Makes intelligent decisions about iteration continuation
-- **Deep Think Loop**: Orchestrates autonomous creative iteration
+- **Deep Think Loop**: Orchestrates autonomous styling analysis via multimodal iterations 
 
 ## Prerequisites
 
