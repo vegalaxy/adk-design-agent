@@ -100,122 +100,100 @@ class EditImageInput(BaseModel):
 
 
 async def generate_image(tool_context: ToolContext, inputs: GenerateImageInput) -> str:
-    """Generates a new image based on a prompt and other specifications."""
-    if "GEMINI_API_KEY" not in os.environ:
-        raise ValueError("GEMINI_API_KEY environment variable not set.")
+    """Generate image using Nano Banana for faithful reproduction"""
+    if "GOOGLE_API_KEY" not in os.environ:
+        raise ValueError("GOOGLE_API_KEY environment variable not set.")
 
-    print("Starting image generation: ")
+    logger.info("Starting Nano Banana image generation")
+    
     try:
         client = genai.Client()
-
         inputs = GenerateImageInput(**inputs)
         
-        # Handle reference image if specified
-        reference_image_part = None
-        if inputs.reference_image_filename:
-            if inputs.reference_image_filename == "latest":
-                ref_filename = get_latest_reference_image_filename(tool_context)
-            else:
-                ref_filename = inputs.reference_image_filename
+        # Check for reference image using simple ADK state
+        ref_filename = None
+        if inputs.reference_image_filename == "latest" or not inputs.reference_image_filename:
+            ref_filename = tool_context.state.get("latest_reference_image")
+        else:
+            ref_filename = inputs.reference_image_filename
             
-            if ref_filename:
-                reference_image_part = await load_reference_image(tool_context, ref_filename)
-                if reference_image_part:
-                    logger.info(f"Using reference image: {ref_filename}")
-                else:
-                    logger.warning(f"Could not load reference image: {ref_filename}")
+        # Load reference image if available
+        reference_image_part = None
+        if ref_filename:
+            try:
+                reference_image_part = await tool_context.load_artifact(ref_filename)
+                logger.info(f"Using reference image: {ref_filename}")
+            except Exception as e:
+                logger.warning(f"Could not load reference image {ref_filename}: {e}")
         
-        base_rewrite_prompt = f"""
-        Rewrite the following prompt to be more descriptive and creative for an image generation model, adding relevant creative details: {inputs.prompt}
-        **Important:** Output your prompt as a single paragraph"""
-        if inputs.text_overlay:
-            base_rewrite_prompt += f" the image should have the following text overlayed on it: '{inputs.text_overlay}'"
-        if inputs.aspect_ratio:
-            base_rewrite_prompt += f" the image should be of aspect ratio: {inputs.aspect_ratio}"
+        # Create prompt based on whether we have reference image
         if reference_image_part:
-            base_rewrite_prompt += f" Use the provided reference image as inspiration for style, composition, or visual elements."
+            # Nano Banana faithful reproduction
+            prompt = f"""Create a FAITHFUL reproduction of the garment in the reference image: {inputs.prompt}
 
-        rewritten_prompt_response = client.models.generate_content(model="gemini-2.5-flash", contents=base_rewrite_prompt)
-        rewritten_prompt = rewritten_prompt_response.text
-        print(f"Rewritten prompt: {rewritten_prompt}")
-
-        model = "gemini-2.5-flash-image-preview"
-        
-        prompt = rewritten_prompt
-
-        # Build content parts - include reference image if available
+NANO BANANA FAITHFUL REPRODUCTION:
+- Reproduce EXACT garment from reference image
+- Maintain identical design, proportions, details
+- Preserve original color palette and material texture
+- Professional e-commerce white background
+- Studio lighting with clean shadows"""
+            
+            if inputs.aspect_ratio:
+                prompt += f"\n- Aspect ratio: {inputs.aspect_ratio}"
+            
+            logger.info("Using Nano Banana faithful reproduction mode")
+        else:
+            # Regular generation without reference
+            prompt = f"Create a luxury {inputs.prompt} with professional e-commerce photography, white background, studio lighting"
+            if inputs.aspect_ratio:
+                prompt += f", aspect ratio {inputs.aspect_ratio}"
+                
+        # Build multimodal content
         content_parts = [types.Part.from_text(text=prompt)]
         if reference_image_part:
             content_parts.append(reference_image_part)
 
-        contents = [
-            types.Content(
-                role="user",
-                parts=content_parts,
-            ),
-        ]
-        generate_content_config = types.GenerateContentConfig(
-            response_modalities=[
-                "IMAGE",
-                "TEXT",
-            ],
-        )
+        # Generate using Nano Banana model
+        contents = [types.Content(role="user", parts=content_parts)]
+        config = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
 
-        # Generate versioned filename for artifact
+        # Create versioned filename
         version = get_next_version_number(tool_context, inputs.asset_name)
         artifact_filename = create_versioned_filename(inputs.asset_name, version)
-        logger.info(f"Generating image with versioned artifact filename: {artifact_filename} (version {version})")
-
+        
+        # Generate with gemini-2.5-flash-image-preview
         for chunk in client.models.generate_content_stream(
-            model=model,
+            model="gemini-2.5-flash-image-preview",
             contents=contents,
-            config=generate_content_config,
+            config=config,
         ):
-            if (
-                chunk.candidates is None
-                or chunk.candidates[0].content is None
-                or chunk.candidates[0].content.parts is None
-            ):
-                continue
-            if chunk.candidates[0].content.parts[0].inline_data and chunk.candidates[0].content.parts[0].inline_data.data:
-                inline_data = chunk.candidates[0].content.parts[0].inline_data
+            if (chunk.candidates and chunk.candidates[0].content and 
+                chunk.candidates[0].content.parts and
+                chunk.candidates[0].content.parts[0].inline_data):
                 
-                # Create a Part object from the inline data to save as artifact
+                inline_data = chunk.candidates[0].content.parts[0].inline_data
                 image_part = types.Part(inline_data=inline_data)
                 
-                try:
-                    # Save the image as an artifact
-                    version = await tool_context.save_artifact(
-                        filename=artifact_filename, 
-                        artifact=image_part
-                    )
-                    
-                    # Update version tracking
-                    update_asset_version(tool_context, inputs.asset_name, version, artifact_filename)
-                    
-                    # Store artifact filename in session state for future reference
-                    tool_context.state["last_generated_image"] = artifact_filename
-                    tool_context.state["current_asset_name"] = inputs.asset_name
-                    
-                    logger.info(f"Saved generated image as artifact '{artifact_filename}' (version {version})")
-                    
-                    return f"Image generated successfully! Saved as artifact: {artifact_filename} (version {version} of {inputs.asset_name})"
-                    
-                except Exception as e:
-                    logger.error(f"Error saving artifact: {e}")
-                    return f"Error saving generated image as artifact: {e}"
-            else:
-                print(chunk.text)
+                # Save using ADK's native artifact service
+                version = await tool_context.save_artifact(artifact_filename, image_part)
                 
-        return "No image was generated"
+                # Simple state tracking
+                update_asset_version(tool_context, inputs.asset_name, version, artifact_filename)
+                tool_context.state["last_generated_image"] = artifact_filename
+                
+                logger.info(f"Generated and saved: {artifact_filename} (v{version})")
+                return f"✅ Faithful reproduction generated: {artifact_filename} (v{version})"
+                
+        return "❌ No image was generated"
+        
     except Exception as e:
-        print(f"An error occurred: {e}")
-        return ""
+        logger.error(f"Generation error: {e}")
+        return f"❌ Error: {e}"
 
 async def edit_image(tool_context: ToolContext, inputs: EditImageInput) -> str:
     """Edits an existing image based on a prompt."""
-    if "GEMINI_API_KEY" not in os.environ:
-        raise ValueError("GEMINI_API_KEY environment variable not set.")
+    if "GOOGLE_API_KEY" not in os.environ:
+        raise ValueError("GOOGLE_API_KEY environment variable not set.")
 
     print("Starting image edit")
 
@@ -251,8 +229,24 @@ async def edit_image(tool_context: ToolContext, inputs: EditImageInput) -> str:
 
         model = "gemini-2.5-flash-image-preview"
 
+        # Create Nano Banana prompt for faithful editing when reference image is available
+        if reference_image_part:
+            # Faithful reproduction edit prompt
+            edit_prompt = f"""Edit this garment image using the reference image as a guide for faithful reproduction: {inputs.prompt}
+
+🎯 NANO BANANA FAITHFUL EDITING:
+- Use the reference image to guide style, colors, and details
+- Maintain consistency with the reference image's design language
+- Preserve authentic garment construction and proportions
+- Keep the luxury aesthetic and material quality
+- Professional e-commerce photography standards"""
+            
+            print(f"Nano Banana faithful edit prompt: {edit_prompt}")
+        else:
+            edit_prompt = inputs.prompt
+
         # Build content parts - include reference image if available
-        content_parts = [loaded_image_part, types.Part.from_text(text=inputs.prompt)]
+        content_parts = [loaded_image_part, types.Part.from_text(text=edit_prompt)]
         if reference_image_part:
             content_parts.append(reference_image_part)
 
@@ -340,3 +334,47 @@ async def list_asset_versions(tool_context: ToolContext) -> str:
 async def list_reference_images(tool_context: ToolContext) -> str:
     """Lists all reference images uploaded in this session."""
     return get_reference_images_info(tool_context)
+
+# New ADK-native tool for storing uploaded reference images
+class StoreReferenceImageInput(BaseModel):
+    image_data: str = Field(..., description="Base64 encoded image data")
+    filename: str = Field(default=None, description="Optional filename for the reference image")
+
+async def store_reference_image(tool_context: ToolContext, inputs: StoreReferenceImageInput) -> str:
+    """Store uploaded reference image for faithful reproduction"""
+    try:
+        import base64
+        
+        inputs = StoreReferenceImageInput(**inputs)
+        
+        # Decode base64 image data
+        image_data = base64.b64decode(inputs.image_data)
+        
+        # Generate filename
+        image_hash = hashlib.md5(image_data).hexdigest()[:8]
+        filename = inputs.filename or f"reference_{image_hash}_{int(time.time())}.jpg"
+        
+        # Create image part
+        image_part = types.Part(
+            inline_data=types.Blob(data=image_data, mime_type="image/jpeg")
+        )
+        
+        # Store using ADK's native artifact service
+        version = await tool_context.save_artifact(filename, image_part)
+        
+        # Simple state tracking
+        tool_context.state["latest_reference_image"] = filename
+        reference_images = tool_context.state.get("reference_images", {})
+        reference_images[filename] = {
+            "version": version,
+            "timestamp": time.time(),
+            "hash": image_hash
+        }
+        tool_context.state["reference_images"] = reference_images
+        
+        logger.info(f"Stored reference image: {filename}")
+        return f"✅ Reference image stored: {filename} (ready for faithful reproduction)"
+        
+    except Exception as e:
+        logger.error(f"Error storing reference image: {e}")
+        return f"❌ Error storing reference image: {e}"
